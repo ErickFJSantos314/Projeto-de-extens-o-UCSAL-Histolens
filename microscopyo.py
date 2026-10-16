@@ -69,7 +69,8 @@ border_height = (canvas_height - viewport_height) // 2
 transcript_text = ""
 assistant_text = ""
 current_state = HistoLensState.IDLE
-status_text = "Ready"
+is_pt = os.getenv("HISTOLENS_LANGUAGE_CODE", "pt-BR").lower().startswith("pt")
+status_text = "Pronto" if is_pt else "Ready"
 stt_result_queue: queue.Queue = queue.Queue()
 stt_worker: threading.Thread | None = None
 ai_result_queue: queue.Queue = queue.Queue()
@@ -80,8 +81,7 @@ orchestrator: HistoLensOrchestrator | None = None
 voice_recorder = RealtimeMedicalRecorder(
     sample_rate_hertz=16000,
     channels=1,
-    language_code="en-US",
-    model="medical_conversation",
+    language_code=os.getenv("HISTOLENS_LANGUAGE_CODE", "pt-BR"),
 )
 
 
@@ -126,7 +126,8 @@ def process_ai_in_background(query_text: str, screenshot_path: str) -> None:
         route_info = orchestrator.router.classify_query(query_text)
         if route_info[0].value in ["image_interaction", "technical_doubt", "heavy_diagnostic"]:
             try:
-                speak_text("This may take a moment.")
+                wait_msg = "Aguarde um momento, consultando inteligência artificial." if is_pt else "This may take a moment."
+                speak_text(wait_msg)
             except Exception:
                 pass
         result = orchestrator.handle_query(
@@ -198,7 +199,7 @@ while True:
         else:
             transcript_text = ""
             print(f"STT error: {payload}")
-            status_text = "STT Error"
+            status_text = "Erro no STT" if is_pt else "STT Error"
 
     while not ai_result_queue.empty():
         result_type, payload = ai_result_queue.get_nowait()
@@ -212,12 +213,12 @@ while True:
             print(f"AI response: {final_response}")
             if payload.get("tts_status") == "error":
                 print(f"TTS warning: {payload.get('tts_error')}")
-                status_text = "TTS Error"
+                status_text = "Erro no TTS" if is_pt else "TTS Error"
             else:
-                status_text = "Ready"
+                status_text = "Pronto" if is_pt else "Ready"
         else:
             print(f"AI error: {payload}")
-            status_text = "AI Error"
+            status_text = "Erro na IA" if is_pt else "AI Error"
 
     canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.uint8) * 255
     
@@ -231,30 +232,34 @@ while True:
     draw_panel(canvas, 15, 15, 320, 50, info_text, bg_color=(220, 240, 255), text_color=(0, 0, 0))
     
     status_color = STATE_COLORS[current_state]
-    status_box_x = canvas_width - 150
+    status_box_x = canvas_width - 170
     status_box_y = 15
-    cv2.rectangle(canvas, (status_box_x, status_box_y), (status_box_x + 135, status_box_y + 50), status_color, -1)
-    cv2.rectangle(canvas, (status_box_x, status_box_y), (status_box_x + 135, status_box_y + 50), (0, 0, 0), 2)
-    cv2.putText(canvas, "HistoLens:", (status_box_x + 8, status_box_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    cv2.putText(canvas, status_text, (status_box_x + 8, status_box_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+    cv2.rectangle(canvas, (status_box_x, status_box_y), (status_box_x + 155, status_box_y + 50), status_color, -1)
+    cv2.rectangle(canvas, (status_box_x, status_box_y), (status_box_x + 155, status_box_y + 50), (0, 0, 0), 2)
+    cv2.putText(canvas, "HistoLens AI:", (status_box_x + 8, status_box_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1)
+    cv2.putText(canvas, status_text, (status_box_x + 8, status_box_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1)
     
     if transcript_text:
-        transcricao_display = f"STT: {transcript_text[:100]}"
+        transcricao_display = f"Voz: {transcript_text[:100]}" if is_pt else f"STT: {transcript_text[:100]}"
     else:
-        transcricao_display = "STT: (waiting for input...)"
+        transcricao_display = "Voz: (aguardando comando...)" if is_pt else "STT: (waiting for input...)"
     draw_panel(canvas, 15, canvas_height - 70, canvas_width - 30, 55, transcricao_display, bg_color=(240, 255, 240), text_color=(0, 100, 0))
 
     if assistant_text:
-        resposta_display = f"AI: {assistant_text[:100]}"
+        resposta_display = f"IA: {assistant_text[:100]}"
     else:
-        resposta_display = "AI: (waiting for response...)"
+        resposta_display = "IA: (aguardando analise...)" if is_pt else "AI: (waiting for response...)"
     draw_panel(canvas, 15, canvas_height - 130, canvas_width - 30, 50, resposta_display, bg_color=(235, 245, 255), text_color=(20, 20, 120))
     
-    audio_status = "REC ●" if voice_recorder.is_recording else "○ LISTEN"
-    draw_panel(canvas, canvas_width - 150, canvas_height - 70, 135, 55, audio_status, bg_color=(255, 240, 240), text_color=(0, 0, 0))
+    if voice_recorder.is_recording:
+        audio_status = "GRAVANDO ●" if is_pt else "REC ●"
+    else:
+        audio_status = "○ AGUARDANDO" if is_pt else "○ LISTEN"
+    draw_panel(canvas, canvas_width - 170, canvas_height - 70, 155, 55, audio_status, bg_color=(255, 240, 240), text_color=(0, 0, 0))
 
-    cv2.namedWindow("HistoLens - SmartScope AI", cv2.WINDOW_AUTOSIZE)
-    cv2.imshow("HistoLens - SmartScope AI", canvas)
+    window_name = "HistoLens - Digital Twin (UCSAL Extensao)" if is_pt else "HistoLens - SmartScope AI"
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    cv2.imshow(window_name, canvas)
 
     tecla = cv2.waitKey(1) & 0xFF
     
@@ -263,53 +268,51 @@ while True:
     if tecla == ord('d'): 
         view_x += movement_step
         current_state = HistoLensState.IDLE
-        status_text = "Navigating"
+        status_text = "Navegando" if is_pt else "Navigating"
     if tecla == ord('a'): 
         view_x -= movement_step
         current_state = HistoLensState.IDLE
-        status_text = "Navigating"
+        status_text = "Navegando" if is_pt else "Navigating"
     if tecla == ord('s'): 
         view_y += movement_step
         current_state = HistoLensState.IDLE
-        status_text = "Navigating"
+        status_text = "Navegando" if is_pt else "Navigating"
     if tecla == ord('w'): 
         view_y -= movement_step
         current_state = HistoLensState.IDLE
-        status_text = "Navigating"
+        status_text = "Navegando" if is_pt else "Navigating"
 
     if tecla == ord('e'):
         if current_level > 0:
             current_level -= 1
             current_state = HistoLensState.IDLE
-            status_text = "Zoom In"
+            status_text = "Zoom +" if is_pt else "Zoom In"
             print(f"Zoom In: Level {current_level}")
             
     if tecla == ord('q'):
         if current_level < (slide.level_count - 1):
             current_level += 1
             current_state = HistoLensState.IDLE
-            status_text = "Zoom Out"
+            status_text = "Zoom -" if is_pt else "Zoom Out"
             print(f"Zoom Out: Level {current_level}")
 
     if tecla == ord('r'):
         if not voice_recorder.is_recording:
             if stt_worker is not None and stt_worker.is_alive():
-                print("STT is still processing. Wait before recording again.")
                 current_state = HistoLensState.PROCESSING
-                status_text = "Processing..."
+                status_text = "Processando..." if is_pt else "Processing..."
                 continue
             if ai_worker is not None and ai_worker.is_alive():
-                print("AI is still processing the previous response. Wait for completion.")
                 current_state = HistoLensState.PROCESSING
-                status_text = "AI Processing..."
+                status_text = "Processando..." if is_pt else "AI Processing..."
                 continue
             voice_recorder.start()
             current_state = HistoLensState.LISTENING
-            status_text = "Listening..."
-            print("Recording audio... press 'r' again to stop.")
+            status_text = "Ouvindo..." if is_pt else "Listening..."
+            print("Gravando audio... pressione 'r' novamente para parar.")
         else:
             current_state = HistoLensState.PROCESSING
-            status_text = "Processing..."
+            status_text = "Processando..." if is_pt else "Processing..."
             stt_worker = threading.Thread(target=transcribe_in_background, daemon=True)
             stt_worker.start()
 

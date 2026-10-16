@@ -25,13 +25,16 @@ class RealtimeMedicalRecorder:
         self,
         sample_rate_hertz: int = 16000,
         channels: int = 1,
-        language_code: str = "en-US",
-        model: str = "medical_dictation",
+        language_code: str | None = None,
+        model: str | None = None,
     ) -> None:
         self.sample_rate_hertz = sample_rate_hertz
         self.channels = channels
-        self.language_code = language_code
-        self.model = model
+        self.language_code = language_code or os.getenv("HISTOLENS_LANGUAGE_CODE", "pt-BR")
+        if model is None:
+            self.model = "latest_short" if self.language_code.lower().startswith("pt") else "medical_conversation"
+        else:
+            self.model = model
         self._frames: List[np.ndarray] = []
         self._stream: sd.InputStream | None = None
         self.is_recording = False
@@ -136,15 +139,27 @@ def _pick_best_results(primary: List[Tuple[str, float]], fallback: List[Tuple[st
 def transcribe_medical(
     audio_path: str = "",
     gcs_uri: str = "",
-    language_code: str = "en-US",
-    model: str = "medical_dictation",
+    language_code: str = "",
+    model: str = "",
     encoding: str = "LINEAR16",
     sample_rate_hertz: int = 16000,
     channel_count: int = 1,
 ) -> List[Tuple[str, float]]:
-    """Runs one-shot transcription using Google medical speech models."""
+    """Runs one-shot transcription using Google Speech models with medical phrase context."""
     if not audio_path and not gcs_uri:
         raise ValueError("Provide either audio_path or gcs_uri")
+
+    selected_language_code = language_code or os.getenv("HISTOLENS_LANGUAGE_CODE", "pt-BR")
+    is_pt = selected_language_code.lower().startswith("pt")
+
+    if not model:
+        selected_model = "latest_short" if is_pt else "medical_dictation"
+    else:
+        # Google medical models are only available for en-US
+        if is_pt and model in ["medical_dictation", "medical_conversation"]:
+            selected_model = "latest_short"
+        else:
+            selected_model = model
 
     credentials_path = _resolve_google_credentials_path()
     if credentials_path:
@@ -166,21 +181,45 @@ def transcribe_medical(
             content = audio_file.read()
         audio = speech.RecognitionAudio(content=content)
 
-    forced_language_code = "en-US"
-    phrase_hints = [
-        "carcinoma",
-        "neoplasia",
-        "melanoma",
-        "mitosis",
-        "histopathology",
-        "diagnosis",
-    ]
+    if is_pt:
+        phrase_hints = [
+            "carcinoma",
+            "neoplasia",
+            "melanoma",
+            "mitose",
+            "histopatologia",
+            "diagnóstico",
+            "células escamosas",
+            "atipia",
+            "colo de útero",
+            "infiltrado inflamatório",
+            "biópsia",
+            "estroma",
+            "epitélio",
+            "hiperplasia",
+            "displasia",
+            "lâmina",
+            "linfonodo",
+        ]
+    else:
+        phrase_hints = [
+            "carcinoma",
+            "neoplasia",
+            "melanoma",
+            "mitosis",
+            "histopathology",
+            "diagnosis",
+            "squamous cells",
+            "atypia",
+            "biopsy",
+            "epithelium",
+        ]
 
     config = speech.RecognitionConfig(
         encoding=getattr(speech.RecognitionConfig.AudioEncoding, encoding),
         sample_rate_hertz=sample_rate_hertz,
-        language_code=forced_language_code,
-        model=model,
+        language_code=selected_language_code,
+        model=selected_model,
         audio_channel_count=channel_count,
         enable_word_time_offsets=True,
         use_enhanced=True,
@@ -191,8 +230,8 @@ def transcribe_medical(
     fallback_config = speech.RecognitionConfig(
         encoding=getattr(speech.RecognitionConfig.AudioEncoding, encoding),
         sample_rate_hertz=sample_rate_hertz,
-        language_code=forced_language_code,
-        model="latest_short",
+        language_code=selected_language_code,
+        model="latest_short" if not is_pt else "default",
         audio_channel_count=channel_count,
         enable_word_time_offsets=True,
         use_enhanced=True,

@@ -28,7 +28,7 @@ def _truncate_text_for_tts(text: str, max_bytes: int = 4500) -> str:
 def synthesize_speech(
     text: str,
     output_path: str,
-    language_code: str = "en-US",
+    language_code: str = "",
     voice_name: str = "",
     ssml_gender: str = "NEUTRAL",
     audio_encoding: str = "LINEAR16",
@@ -37,13 +37,15 @@ def synthesize_speech(
     client = texttospeech.TextToSpeechClient()
 
     synthesis_input = texttospeech.SynthesisInput(text=text)
+    selected_lang = language_code or os.getenv("HISTOLENS_LANGUAGE_CODE", "pt-BR")
+    selected_voice = voice_name or os.getenv("HISTOLENS_TTS_VOICE_NAME", "")
 
     voice_kwargs = {
-        "language_code": language_code,
+        "language_code": selected_lang,
         "ssml_gender": getattr(texttospeech.SsmlVoiceGender, ssml_gender),
     }
-    if voice_name:
-        voice_kwargs["name"] = voice_name
+    if selected_voice:
+        voice_kwargs["name"] = selected_voice
     voice = texttospeech.VoiceSelectionParams(**voice_kwargs)
 
     audio_config = texttospeech.AudioConfig(
@@ -62,7 +64,7 @@ def synthesize_speech(
 
 def speak_text(
     text: str,
-    language_code: str = "en-US",
+    language_code: str = "",
     voice_name: str = "",
     ssml_gender: str = "NEUTRAL",
 ) -> str:
@@ -76,8 +78,8 @@ def speak_text(
     synthesize_speech(
         text=text_to_speak,
         output_path=output_path,
-        language_code=language_code,
-        voice_name=voice_name,
+        language_code=language_code or os.getenv("HISTOLENS_LANGUAGE_CODE", "pt-BR"),
+        voice_name=voice_name or os.getenv("HISTOLENS_TTS_VOICE_NAME", ""),
         ssml_gender=ssml_gender,
         audio_encoding="LINEAR16",
     )

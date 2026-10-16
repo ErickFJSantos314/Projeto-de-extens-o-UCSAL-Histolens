@@ -58,24 +58,24 @@ class MaestroRouter:
         self.model_name = self._resolve_model_name()
         self.model = genai.GenerativeModel(self.model_name)
 
-        self.system_prompt = """You are the HistoLens triage engine for WSI histopathology workflows.
-Your task is strict intent routing.
+        self.system_prompt = """You are the HistoLens triage engine for histopathology and clinical laboratory workflows (including Brazilian SUS public health labs).
+Your task is strict intent routing. The pathologist or laboratory professional may speak in Portuguese (PT-BR) or English.
 
 Classify each input into exactly one route:
 
 1) BASIC_CHAT
-- Greetings, social interactions, generic assistant questions.
+- Greetings, social interactions, generic assistant questions (ex: "olá", "bom dia", "como você funciona?", "hello").
 
 2) IMAGE_INTERACTION
-- Visual/morphological description of the current microscope field without advanced diagnosis.
-- Any request to analyze/describe the current image should map here.
+- Visual or morphological description of the current microscope field/slide without complex diagnosis (ex: "descreva esta lâmina", "o que você vê neste campo?", "qual a coloração?", "describe this field").
+- Any request to observe, analyze, or describe the current visual frame maps here.
 
 3) TECHNICAL_DOUBT
-- Theoretical references, protocols, guidelines, classifications, ICD questions.
+- Theoretical references, protocol guidelines, ICD/CID-10/CID-11 questions, staging criteria, lab norms (ex: "qual o CID para carcinoma basocelular?", "qual o critério de Gleason?", "what is the staging protocol?").
 - Current image is not required.
 
 4) HEAVY_DIAGNOSTIC
-- Complex diagnostic support requiring morphology + differential reasoning.
+- Complex diagnostic assistance requiring morphological evidence + differential reasoning or diagnostic hypotheses (ex: "sugira diagnósticos diferenciais para este tecido", "suspeita de malignidade?", "analise atipias e sugira conduta").
 
 Return JSON only:
 {
@@ -90,6 +90,7 @@ Return JSON only:
 
     def _resolve_model_name(self) -> str:
         preferred_models = [
+            "gemini-2.5-flash",
             "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
             "gemini-1.5-flash",
@@ -144,8 +145,16 @@ Return JSON only:
         self.on_status_change("MAESTRO", "Analyzing user intent...")
 
         quick_query = query.lower()
-        if any(token in quick_query for token in ["image", "slide", "wsi", "histology", "histopathology"]):
-            if any(token in quick_query for token in ["analyze", "analyse", "describe", "look", "see"]):
+        image_keywords = [
+            "image", "slide", "wsi", "histology", "histopathology",
+            "imagem", "lâmina", "lamina", "campo", "corte", "tecido", "célula", "celula"
+        ]
+        action_keywords = [
+            "analyze", "analyse", "describe", "look", "see",
+            "analise", "analisar", "descreva", "descrever", "olhe", "veja", "mostre", "observe"
+        ]
+        if any(token in quick_query for token in image_keywords):
+            if any(token in quick_query for token in action_keywords):
                 return RouteType.IMAGE_INTERACTION, 0.99, "Explicit image-analysis request"
 
         try:
@@ -286,9 +295,9 @@ class HistoLensOrchestrator:
         if route == RouteType.BASIC_CHAT:
             self.on_status_change("FLOW", "Basic: direct Gemini response")
             final = self.router.ask_gemini(
-                "You are HistoLens, a conversational assistant for histopathology workflows. "
+                "You are HistoLens, a conversational assistant for histopathology and clinical laboratory workflows (including Brazilian SUS public health labs). "
                 f"User message: '{query}'\n\n"
-                "Rules: concise, professional, same language as user, no emojis, single short paragraph."
+                "Rules: concise, professional, respond in the same language as the user (Portuguese PT-BR if query is in Portuguese), no emojis, single short paragraph."
             )
             result["gemini_response"] = final
             result["final_response"] = self._normalize_tts_text(final, max_chars=400)
@@ -298,7 +307,7 @@ class HistoLensOrchestrator:
             self.on_status_change("FLOW", "Image interaction: Gemini planning + MedGemma vision")
             vision_brief = self.router.ask_gemini(
                 "Convert the pathologist request into a strict visual extraction instruction for MedGemma. "
-                "Focus only on morphology. No diagnosis. No emojis."
+                "Focus only on morphology (cellularity, nuclei, cytoplasm, architecture, staining). No diagnosis. No emojis."
                 f"\n\nOriginal question: '{query}'"
             )
             result["gemini_response"] = vision_brief
@@ -311,16 +320,17 @@ class HistoLensOrchestrator:
 
             if self._is_medgemma_error(vision_response):
                 final = self.router.ask_gemini(
-                    "Visual model is unavailable. Explain limitation and ask user to validate endpoint access. "
-                    "Same language as user. No emojis."
+                    "Visual model is unavailable. Explain limitation politely and ask user to validate endpoint access. "
+                    "Respond in the same language as the user (Portuguese PT-BR if query is in Portuguese). No emojis."
                     f"\n\nUser question: {query}"
                 )
                 result["final_response"] = self._normalize_tts_text(final, max_chars=400)
                 return result
 
             final = self.router.ask_gemini(
-                "You are assisting a pathologist. Use only the morphology below and answer directly. "
-                "No invented diagnosis unless explicitly requested. Single paragraph under 5 sentences."
+                "You are assisting a pathologist or laboratory technician. "
+                "Use only the morphology below and answer directly. Respond in the same language as the user (Portuguese PT-BR if query is in Portuguese). "
+                "No invented diagnosis unless explicitly requested. Single continuous paragraph under 5 sentences. No markdown, no asterisks."
                 f"\n\nMorphology: {vision_response}\n\nUser question: {query}"
             )
             result["final_response"] = self._normalize_tts_text(final, max_chars=700)
@@ -329,8 +339,8 @@ class HistoLensOrchestrator:
         if route == RouteType.TECHNICAL_DOUBT:
             self.on_status_change("FLOW", "Technical: Gemini knowledge response")
             final = self.router.ask_gemini(
-                "You are HistoLens Medical Board. Provide technically precise pathology guidance. "
-                "Same language as user. No emojis. Single paragraph under 8 sentences."
+                "You are HistoLens Medical Board. Provide technically precise pathology and laboratory guidance (including SUS guidelines and international staging when relevant). "
+                "Respond in the same language as the user (Portuguese PT-BR if query is in Portuguese). No emojis. Single paragraph under 8 sentences. No markdown, no asterisks."
                 f"\n\nQuestion: '{query}'"
             )
             result["gemini_response"] = final
@@ -341,7 +351,7 @@ class HistoLensOrchestrator:
 
         visual_plan = self.router.ask_gemini(
             "Extract a strict visual analysis plan for a pathology vision model. "
-            "List what to inspect in nuclei, architecture, and atypia, but output as plain sentences."
+            "List what to inspect in nuclei, architecture, and atypia, but output as plain English sentences."
             f"\n\nRequest: '{query}'"
         )
         result["gemini_response"] = visual_plan
@@ -355,13 +365,13 @@ class HistoLensOrchestrator:
         if self._is_medgemma_error(visual_report):
             fallback = self.router.ask_gemini(
                 "Visual analysis is unavailable. Provide cautious guidance, clearly state limitations. "
-                "Same language as user. No emojis."
+                "Respond in the same language as the user (Portuguese PT-BR if query is in Portuguese). No emojis."
                 f"\n\nQuestion: {query}"
             )
             result["final_response"] = self._normalize_tts_text(fallback, max_chars=600)
             return result
 
-        board_prompt = f"""You are the Chief Pathologist in HistoLens Medical Board.
+        board_prompt = f"""You are the Chief Pathologist in HistoLens Medical Board (clinical decision support for laboratory pathology, including SUS public health workflows).
 
 Morphological analysis from MedGemma:
 {visual_report}
@@ -370,9 +380,11 @@ Clinical question:
 {query}
 
 Requirements:
-- Synthesize visual findings with clinical context.
+- Respond in the same language as the user (use Brazilian Portuguese PT-BR if user query is in Portuguese).
+- Synthesize visual findings with clinical context as diagnostic decision support.
 - Propose differential diagnostic hypotheses with confidence framing.
-- Keep output as one paragraph.
+- Frame recommendations as decision support for the responsible pathologist/technician.
+- Keep output as one continuous paragraph suitable for TTS audio readout.
 - No bullet points, no numbering, no markdown, no asterisks.
 - Keep under 140 words.
 """
